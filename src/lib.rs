@@ -22,6 +22,7 @@ use hyper::rt::Future;
 use hyper::{Method, Request};
 use hyper_tls::HttpsConnector;
 use tokio::runtime::current_thread;
+use serde_json::value::Value as JsonValue;
 
 /// Report an error. Any type that implements `error::Error` is accepted.
 #[macro_export]
@@ -255,6 +256,9 @@ pub struct ReportErrorBuilder<'a> {
     /// The title shown in the dashboard for this report.
     #[serde(skip_serializing_if = "Option::is_none")]
     title: Option<String>,
+
+    /// Custom arbitrary metadata.
+    metadata: Option<JsonValue>
 }
 
 impl<'a> ReportErrorBuilder<'a> {
@@ -290,6 +294,9 @@ impl<'a> ReportErrorBuilder<'a> {
     /// Set the security level of the report. `Level::ERROR` is the default value.
     add_generic_field!(with_level, level, Into<Level>);
 
+    /// Set arbitrary custom metadata to be attached to the error report.
+    add_field!(with_metadata, metadata, JsonValue);
+
     /// Set the title to show in the dashboard for this report.
     add_generic_field!(with_title, title, Into<String>);
 
@@ -323,7 +330,10 @@ impl<'a> ToString for ReportErrorBuilder<'a> {
                     .unwrap_or(Level::ERROR)
                     .to_string(),
                 "language": "rust",
-                "title": self.title
+                "title": self.title,
+                "custom": self.metadata
+                    .to_owned()
+                    .unwrap_or_else(|| json!({}))
             }
         })
         .to_string()
@@ -339,11 +349,17 @@ pub struct ReportMessageBuilder<'a> {
 
     /// The severity level of the error. `Level::ERROR` is the default value.
     level: Option<Level>,
+
+    /// Custom arbitrary metadata.
+    metadata: Option<JsonValue>
 }
 
 impl<'a> ReportMessageBuilder<'a> {
     /// Set the security level of the report. `Level::ERROR` is the default value
     add_generic_field!(with_level, level, Into<Level>);
+
+    /// Set arbitrary custom metadata to be attached to the error report.
+    add_field!(with_metadata, metadata, JsonValue);
 
     /// Send the message to Rollbar.
     pub fn send(&mut self) -> thread::JoinHandle<Option<ResponseStatus>> {
@@ -375,7 +391,10 @@ impl<'a> ToString for ReportMessageBuilder<'a> {
                 "level": self.level
                     .to_owned()
                     .unwrap_or(Level::INFO)
-                    .to_string()
+                    .to_string(),
+                "custom": self.metadata
+                    .to_owned()
+                    .unwrap_or_else(|| json!({}))
             }
         })
         .to_string()
@@ -412,6 +431,7 @@ impl<'a> ReportBuilder<'a> {
             trace: trace,
             level: None,
             title: Some(message.to_owned()),
+            metadata: None
         }
     }
 
@@ -430,6 +450,7 @@ impl<'a> ReportBuilder<'a> {
             trace: trace,
             level: None,
             title: Some(format!("{}", error)),
+            metadata: None
         }
     }
 
@@ -450,6 +471,7 @@ impl<'a> ReportBuilder<'a> {
             trace: trace,
             level: None,
             title: Some(message),
+            metadata: None
         }
     }
 
@@ -459,6 +481,7 @@ impl<'a> ReportBuilder<'a> {
             report_builder: self,
             message: message,
             level: None,
+            metadata: None
         }
     }
 
@@ -703,6 +726,7 @@ mod tests {
                         }
                     }
                 },
+                "custom": {},
                 "level": "info",
                 "language": "rust",
                 "title": "attempt to divide by zero"
@@ -741,7 +765,7 @@ mod tests {
             .unwrap() = line_number.to_owned();
 
         normalize_frames!(payload, expected_payload, 1);
-        assert_eq!(expected_payload.to_string(), payload.to_string());
+        assert_eq!(expected_payload, payload);
     }
 
     #[test]
@@ -782,6 +806,7 @@ mod tests {
                                 }
                             }
                         },
+                        "custom": {},
                         "level": "warning",
                         "language": "rust",
                         "title": "w"
@@ -790,7 +815,7 @@ mod tests {
 
                 let mut payload: Value = serde_json::from_str(&*payload).unwrap();
                 normalize_frames!(payload, expected_payload, 2);
-                assert_eq!(expected_payload.to_string(), payload.to_string());
+                assert_eq!(expected_payload, payload);
             }
         }
     }
@@ -803,6 +828,9 @@ mod tests {
             .build_report()
             .from_message("hai")
             .with_level("warning")
+            .with_metadata(json!({
+                "foo": "bar"
+            }))
             .to_string();
 
         let expected_payload = json!({
@@ -813,6 +841,9 @@ mod tests {
                     "message": {
                         "body": "hai"
                     }
+                },
+                "custom": {
+                     "foo": "bar"
                 },
                 "level": "warning"
             }
