@@ -17,11 +17,10 @@ use std::sync::Arc;
 use std::{error, fmt, panic, thread};
 
 use backtrace::Backtrace;
+use futures::FutureExt;
 //use hyper::client::HttpConnector;
-use hyper::rt::Future;
 use hyper::{Method, Request};
 use hyper_tls::HttpsConnector;
-use tokio::runtime::current_thread;
 use serde_json::value::Value as JsonValue;
 
 /// Report an error. Any type that implements `error::Error` is accepted.
@@ -136,21 +135,21 @@ impl<'a> From<&'a str> for Level {
 
 impl ToString for Level {
     fn to_string(&self) -> String {
-        match self {
-            &Level::CRITICAL => "critical".to_string(),
-            &Level::ERROR => "error".to_string(),
-            &Level::WARNING => "warning".to_string(),
-            &Level::INFO => "info".to_string(),
-            &Level::DEBUG => "debug".to_string(),
+        match *self {
+            Level::CRITICAL => "critical".to_string(),
+            Level::ERROR => "error".to_string(),
+            Level::WARNING => "warning".to_string(),
+            Level::INFO => "info".to_string(),
+            Level::DEBUG => "debug".to_string(),
         }
     }
 }
 
 // https://rollbar.com/docs/api/items_post/
-const URL: &'static str = "https://api.rollbar.com/api/1/item/";
+const URL: &str = "https://api.rollbar.com/api/1/item/";
 
 /// Builder for a generic request to Rollbar.
-pub struct ReportBuilder<'a> {
+pub struct  ReportBuilder<'a> {
     client: &'a Client,
     send_strategy: Option<
         Box<
@@ -161,6 +160,7 @@ pub struct ReportBuilder<'a> {
         >,
     >,
 }
+
 
 /// Wrapper for a trace, payload of a single exception.
 #[derive(Serialize, Default, Debug)]
@@ -428,7 +428,7 @@ impl<'a> ReportBuilder<'a> {
 
         ReportErrorBuilder {
             report_builder: self,
-            trace: trace,
+            trace,
             level: None,
             title: Some(message.to_owned()),
             metadata: None
@@ -447,7 +447,7 @@ impl<'a> ReportBuilder<'a> {
 
         ReportErrorBuilder {
             report_builder: self,
-            trace: trace,
+            trace,
             level: None,
             title: Some(format!("{}", error)),
             metadata: None
@@ -468,7 +468,7 @@ impl<'a> ReportBuilder<'a> {
 
         ReportErrorBuilder {
             report_builder: self,
-            trace: trace,
+            trace,
             level: None,
             title: Some(message),
             metadata: None
@@ -479,7 +479,7 @@ impl<'a> ReportBuilder<'a> {
     pub fn from_message(&'a mut self, message: &'a str) -> ReportMessageBuilder<'a> {
         ReportMessageBuilder {
             report_builder: self,
-            message: message,
+            message,
             level: None,
             metadata: None
         }
@@ -514,7 +514,7 @@ impl Client {
     /// You can get the `access_token` at
     /// <https://rollbar.com/{your_organization}/{your_app}/settings/access_tokens>.
     pub fn new<T: Into<String>>(access_token: T, environment: T) -> Client {
-        let https = HttpsConnector::new(4).expect("TLS initialization failed");
+        let https = HttpsConnector::new();
         let client = hyper::Client::builder().build::<_, hyper::Body>(https);
 
         Client {
@@ -544,19 +544,22 @@ impl Client {
         let job = self
             .http_client
             .request(request)
-            .map(|res| Some(ResponseStatus::from(res.status())))
-            .map_err(|error| {
-                println!("Error while sending a report to Rollbar.");
-                print!("The error returned by Rollbar was: {:?}.\n\n", error);
-
-                None::<ResponseStatus>
-            });
+            .map(|result|
+                match result {
+                    Ok(resp) => Some(ResponseStatus::from(resp.status())),
+                    Err(error) => {
+                        println!("Error while sending a report to Rollbar.");
+                        print!("The error returned by Rollbar was: {:?}.\n\n", error);
+                        None::<ResponseStatus>
+                    }
+                }
+            );
 
         thread::spawn(move || {
-            current_thread::Runtime::new()
-                .unwrap()
-                .block_on(job)
-                .unwrap()
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                                    .enable_io()
+                                    .build().expect("Error creating runtime");
+            runtime.block_on(job)
         })
     }
 }
